@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
+import { getApiBase } from "../services/config";
 import TopBar from "../components/TopBar";
-import { formatMoney, ROLE_LABELS } from "../lib/format";
+import { formatMoney, ROLE_LABELS, CATEGORY_LABELS } from "../lib/format";
 
 export default function Summary() {
   const [params] = useSearchParams();
@@ -10,8 +11,7 @@ export default function Summary() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(auctionId));
-  const apiBase =
-    import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+  const apiBase = getApiBase();
 
   useEffect(() => {
     if (!auctionId) return;
@@ -92,7 +92,12 @@ export default function Summary() {
                           {p.name}
                           <span className="muted">
                             {" "}
-                            · {ROLE_LABELS[p.role] || p.role || "—"} ·{" "}
+                            · {ROLE_LABELS[p.role] || p.role || "—"}
+                            {" · "}
+                            {CATEGORY_LABELS[p.category] || p.category || "—"}
+                            {" · "}
+                            {p.countryType === "OVERSEAS" ? "OS" : "Local"}
+                            {" · "}
                             {formatMoney(p.price)}
                           </span>
                         </li>

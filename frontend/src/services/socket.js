@@ -1,19 +1,20 @@
 import { io } from "socket.io-client";
+import { getSocketBase } from "./config";
 
 let socket = null;
-
-const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:4000";
+let socketBase = null;
 
 export function getSocket() {
-  if (!socket) {
-    socket = io(SOCKET_URL, {
+  const base = getSocketBase();
+  if (!socket || socketBase !== base) {
+    if (socket) socket.disconnect();
+    socketBase = base;
+    socket = io(base || undefined, {
       transports: ["websocket", "polling"],
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 12,
       reconnectionDelay: 1000,
+      path: "/socket.io",
     });
   }
   return socket;
@@ -23,5 +24,6 @@ export function disconnectSocket() {
   if (socket) {
     socket.disconnect();
     socket = null;
+    socketBase = null;
   }
 }

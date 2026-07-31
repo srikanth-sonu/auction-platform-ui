@@ -2,7 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState } from "react";
 import ViewModeToggle from "../components/ViewModeToggle";
 import useAuctionLive from "../hooks/useAuctionLive";
-import { formatMoney, ROLE_LABELS } from "../lib/format";
+import { formatMoney, ROLE_LABELS, CATEGORY_LABELS } from "../lib/format";
 
 const AuctionScene3D = lazy(() => import("../scene/AuctionScene3D"));
 
@@ -33,6 +33,10 @@ function Live2D({ live, flash }) {
             <h1 className="live-player">{current.name}</h1>
             <div className="live-meta">
               {ROLE_LABELS[current.role] || current.role}
+              {" · "}
+              {CATEGORY_LABELS[current.category] || current.category}
+              {" · "}
+              {current.countryType === "OVERSEAS" ? "Overseas" : "Local"}
             </div>
             <div className="price" key={live.currentPrice}>
               {formatMoney(live.currentPrice)}

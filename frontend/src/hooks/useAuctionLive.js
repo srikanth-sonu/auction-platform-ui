@@ -9,19 +9,9 @@ export default function useAuctionLive(auctionId) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!auctionId) return;
+    if (!auctionId) return undefined;
     let active = true;
-    const socket = getSocket();
-    socket.emit("auction:join", { auctionId: Number(auctionId) });
-
-    Promise.all([
-      api.get(`/api/auction/${auctionId}/state`),
-      api.get(`/api/auction/${auctionId}/players`).catch(() => ({ data: [] })),
-    ]).then(([stateRes, playersRes]) => {
-      if (!active) return;
-      setLive(stateRes.data);
-      setPlayers(playersRes.data || []);
-    });
+    let socket = null;
 
     const refreshPlayers = () => {
       api.get(`/api/auction/${auctionId}/players`).then((res) => {
@@ -29,7 +19,8 @@ export default function useAuctionLive(auctionId) {
       });
     };
 
-    const onLive = (data) => {
+    const applyLive = (data) => {
+      if (!data) return;
       if (data?.id && Number(data.id) !== Number(auctionId)) return;
       setLive(data);
       setError("");
@@ -48,21 +39,53 @@ export default function useAuctionLive(auctionId) {
       refreshPlayers();
     };
 
+    Promise.all([
+      api.get(`/api/auction/${auctionId}/state`),
+      api.get(`/api/auction/${auctionId}/players`).catch(() => ({ data: [] })),
+    ])
+      .then(([stateRes, playersRes]) => {
+        if (!active) return;
+        setLive(stateRes.data);
+        setPlayers(playersRes.data || []);
+      })
+      .catch(() => {
+        if (active) setError("Could not load auction state");
+      });
+
+    const onLive = (data) => applyLive(data);
     const onError = (data) => setError(data?.message || "Action failed");
 
-    socket.on("auction:live", onLive);
-    socket.on("player:update", onLive);
-    socket.on("player:sold", onLive);
-    socket.on("player:unsold", onLive);
-    socket.on("error", onError);
+    try {
+      socket = getSocket();
+      socket.emit("auction:join", { auctionId: Number(auctionId) });
+      socket.on("auction:live", onLive);
+      socket.on("player:update", onLive);
+      socket.on("player:sold", onLive);
+      socket.on("player:unsold", onLive);
+      socket.on("error", onError);
+    } catch {
+      // sockets optional
+    }
+
+    const poll = setInterval(() => {
+      api
+        .get(`/api/auction/${auctionId}/state`)
+        .then((res) => {
+          if (active) setLive(res.data);
+        })
+        .catch(() => {});
+    }, 2500);
 
     return () => {
       active = false;
-      socket.off("auction:live", onLive);
-      socket.off("player:update", onLive);
-      socket.off("player:sold", onLive);
-      socket.off("player:unsold", onLive);
-      socket.off("error", onError);
+      clearInterval(poll);
+      if (socket) {
+        socket.off("auction:live", onLive);
+        socket.off("player:update", onLive);
+        socket.off("player:sold", onLive);
+        socket.off("player:unsold", onLive);
+        socket.off("error", onError);
+      }
     };
   }, [auctionId]);
 

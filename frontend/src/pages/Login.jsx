@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import api from "../services/api";
+import api, { checkApiHealth } from "../services/api";
 import TopBar from "../components/TopBar";
 
 export default function Login() {
@@ -9,6 +9,11 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    checkApiHealth().then(setHealth);
+  }, []);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -25,7 +30,12 @@ export default function Login() {
       localStorage.setItem("admin_pass", password);
       navigate("/admin");
     } catch (err) {
-      setError(err.response?.data?.error || "Login failed");
+      const msg = err.response?.data?.error || err.message || "Login failed";
+      setError(
+        msg.includes("Network") || !err.response
+          ? "Cannot reach API. Open Settings and set your backend URL."
+          : msg
+      );
     } finally {
       setLoading(false);
     }
@@ -36,18 +46,32 @@ export default function Login() {
       <TopBar
         subtitle="Admin access"
         actions={
-          <Link className="btn btn-ghost" to="/">
-            Home
-          </Link>
+          <>
+            <Link className="btn btn-ghost" to="/settings">
+              Settings
+            </Link>
+            <Link className="btn btn-ghost" to="/">
+              Home
+            </Link>
+          </>
         }
       />
       <div className="login-wrap">
         <div className="panel login-panel">
-          <div className="brand-mark" style={{ fontSize: "2.4rem" }}>
-            KPL Auction
-          </div>
-          <h2 style={{ marginTop: 10 }}>Admin sign in</h2>
-          <p className="hint">Control roster, bidding, and the live stage.</p>
+          <div className="brand-mark">KPL Auction</div>
+          <h2 style={{ marginTop: 8 }}>Admin sign in</h2>
+          <p className="hint">Manage clubs, rosters, and the live auction board.</p>
+
+          {health && !health.ok && (
+            <div className="banner error">
+              API offline ({health.base}).{" "}
+              <Link to="/settings">Fix connection</Link>
+            </div>
+          )}
+          {health?.ok && (
+            <div className="banner ok">API connected ({health.base || "same-origin"})</div>
+          )}
+
           <form onSubmit={handleLogin}>
             <div className="field">
               <label htmlFor="username">Username</label>
@@ -69,7 +93,7 @@ export default function Login() {
                 autoComplete="current-password"
               />
             </div>
-            {error && <p className="error-text">{error}</p>}
+            {error && <div className="banner error">{error}</div>}
             <button className="btn" type="submit" disabled={loading}>
               {loading ? "Signing in…" : "Enter console"}
             </button>
