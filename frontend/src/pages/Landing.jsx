@@ -5,37 +5,64 @@ export default function Landing() {
   return (
     <div className="app-frame">
       <TopBar
-        subtitle="Live tournament auction"
+        subtitle="Multi-club cricket auctions"
         actions={
           <>
+            <Link className="btn btn-ghost" to="/settings">
+              Settings
+            </Link>
             <Link className="btn btn-ghost" to="/summary">
               Summary
             </Link>
             <Link className="btn" to="/admin">
-              Open admin
+              Club admin
             </Link>
           </>
         }
       />
-      <section className="hero-landing">
-        <div className="hero-copy">
-          <div className="brand-mark">KPL Auction</div>
-          <h1>Run the night. Own the room.</h1>
-          <p>
-            A modern 2D / 3D switchable auction stage for cricket tournaments —
-            roster, purses, live bids, sold boards, and squad summaries in one
-            flow.
-          </p>
-          <div className="btn-row">
-            <Link className="btn" to="/admin">
-              Start as admin
-            </Link>
-            <Link className="btn btn-ghost" to="/live">
-              Open live stage
-            </Link>
-          </div>
+
+      <section className="hero">
+        <div className="brand-mark">KPL Auction</div>
+        <h1>Professional player auctions for every club.</h1>
+        <p>
+          Create franchises, import rosters, run live bids with purse and overseas
+          rules, and broadcast a 2D/3D stage your room can follow.
+        </p>
+        <div className="btn-row">
+          <Link className="btn" to="/admin" style={{ background: "#fff", color: "#0B6E4F" }}>
+            Open admin console
+          </Link>
+          <Link className="btn btn-ghost" to="/settings" style={{ borderColor: "rgba(255,255,255,0.35)", color: "#fff", background: "transparent" }}>
+            Connect backend
+          </Link>
         </div>
       </section>
+
+      <div className="shell">
+        <div className="feature-grid">
+          <article className="feature-card">
+            <h3>Club-ready setup</h3>
+            <p>
+              Club profiles, colored franchise cards, purse budgets, squad size and
+              overseas limits — built for weekend leagues and mega auctions.
+            </p>
+          </article>
+          <article className="feature-card">
+            <h3>Auctioneer controls</h3>
+            <p>
+              Roster queue, next/random player, tiered increments, team-led bidding,
+              sold/unsold, undo last sale, and CSV import/export.
+            </p>
+          </article>
+          <article className="feature-card">
+            <h3>Live broadcast</h3>
+            <p>
+              Switchable 2D and 3D stage with purses, leading bidder, and sold feed —
+              perfect for a projector or second screen.
+            </p>
+          </article>
+        </div>
+      </div>
     </div>
   );
 }

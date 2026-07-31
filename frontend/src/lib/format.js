@@ -9,6 +9,28 @@ export const ROLE_LABELS = {
   WK: "Wicket-keeper",
 };
 
+export const CATEGORY_LABELS = {
+  CAPPED: "Capped",
+  UNCAPPED: "Uncapped",
+  ICON: "Icon",
+  GRADE_A: "Grade A",
+  GRADE_B: "Grade B",
+  GRADE_C: "Grade C",
+};
+
+export const TEAM_COLORS = [
+  "#0B6E4F",
+  "#1D4E89",
+  "#B23A48",
+  "#F4A261",
+  "#6D597A",
+  "#2A9D8F",
+  "#E76F51",
+  "#264653",
+  "#8Ac926",
+  "#1982C4",
+];
+
 export function parsePlayerLines(text, defaultBase = 500) {
   return String(text || "")
     .split("\n")
@@ -33,7 +55,19 @@ export function parsePlayerLines(text, defaultBase = 500) {
       return {
         name,
         role: roleMap[roleRaw] || "BAT",
-        basePrice: Number(parts[2]) || defaultBase,
+        category: (parts[2] || "UNCAPPED").toUpperCase().replace(/\s+/g, "_"),
+        countryType: (parts[3] || "LOCAL").toUpperCase(),
+        basePrice: Number(parts[4]) || defaultBase,
       };
     });
+}
+
+export function shortCodeFromName(name) {
+  return String(name || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 4)
+    .toUpperCase();
 }
