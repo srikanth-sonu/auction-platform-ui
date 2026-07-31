@@ -16,7 +16,7 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS auctions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      base_price INTEGER NOT NULL,
+      base_price INTEGER NOT NULL DEFAULT 500,
       status TEXT DEFAULT 'CREATED',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -47,7 +47,7 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS auction_state (
       auction_id INTEGER PRIMARY KEY,
       current_player_name TEXT,
-      current_price INTEGER,
+      current_price INTEGER DEFAULT 0,
       is_live INTEGER DEFAULT 0
     )
   `);

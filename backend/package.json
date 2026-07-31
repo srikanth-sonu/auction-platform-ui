@@ -1,16 +1,23 @@
 {
-  "name": "backend",
+  "name": "kpl-auction-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "KPL Auction Platform API",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test --test-force-exit test/*.test.js"
   },
-  "keywords": [],
+  "keywords": [
+    "auction",
+    "kpl",
+    "cricket"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "socket.io": "^4.8.3",
     "sqlite3": "^5.1.7"

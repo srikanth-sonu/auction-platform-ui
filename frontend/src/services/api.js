@@ -1,12 +1,14 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:4000",
 });
 
 api.interceptors.request.use((config) => {
-  config.headers.username = localStorage.getItem("admin_user");
-  config.headers.password = localStorage.getItem("admin_pass");
+  const username = localStorage.getItem("admin_user");
+  const password = localStorage.getItem("admin_pass");
+  if (username) config.headers.username = username;
+  if (password) config.headers.password = password;
   return config;
 });
 
