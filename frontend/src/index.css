@@ -129,6 +129,7 @@ a {
 
 .field input,
 .field select,
+.field textarea,
 .inline-row input,
 .inline-row select {
   width: 100%;
@@ -140,12 +141,25 @@ a {
   outline: none;
 }
 
+.field textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: var(--font-body);
+  line-height: 1.45;
+}
+
 .field input:focus,
 .field select:focus,
+.field textarea:focus,
 .inline-row input:focus,
 .inline-row select:focus {
   border-color: var(--lime);
   box-shadow: 0 0 0 3px rgba(184, 242, 109, 0.15);
+}
+
+.field code {
+  font-size: 0.85em;
+  color: var(--lime);
 }
 
 .btn {
@@ -329,6 +343,150 @@ a {
 
 .muted {
   color: var(--mist);
+}
+
+.roster-list {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.roster-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(7, 21, 15, 0.45);
+}
+
+.bid-board {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.block-player {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 4px 0 8px;
+}
+
+.team-bid-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.team-bid-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(7, 21, 15, 0.55);
+  color: var(--cream);
+  text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.team-bid-btn span {
+  font-size: 0.85rem;
+  color: var(--mist);
+}
+
+.team-bid-btn:hover:not(:disabled),
+.team-bid-btn.active {
+  border-color: var(--lime);
+  background: rgba(184, 242, 109, 0.12);
+  transform: translateY(-1px);
+}
+
+.team-bid-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.live-stage-wide {
+  place-items: stretch;
+  align-content: center;
+}
+
+.live-layout {
+  position: relative;
+  z-index: 1;
+  width: min(1200px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.5fr 0.8fr;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.purse-rail {
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(8, 24, 18, 0.78);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  animation: riseIn 600ms ease-out both;
+}
+
+.purse-rail h3 {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lime);
+}
+
+.purse-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.purse-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(7, 21, 15, 0.55);
+}
+
+.purse-item span:last-child {
+  grid-column: 1 / -1;
+  font-size: 0.82rem;
+}
+
+.purse-item.leading {
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 1px rgba(240, 193, 75, 0.25);
+}
+
+.unsold-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--mist);
+}
+
+@media (max-width: 900px) {
+  .live-layout,
+  .bid-board {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes brandIn {

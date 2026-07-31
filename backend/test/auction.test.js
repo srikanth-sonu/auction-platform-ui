@@ -72,13 +72,7 @@ describe("KPL auction API", () => {
     assert.equal(res.status, 401);
   });
 
-  it("runs create → set player → bid → sell → summary → export", async () => {
-    const login = await request("POST", "/api/auction/login", {
-      username: "admin",
-      password: "admin123",
-    });
-    assert.equal(login.status, 200);
-
+  it("runs full auction night flow", async () => {
     const created = await request(
       "POST",
       "/api/auction",
@@ -87,12 +81,17 @@ describe("KPL auction API", () => {
         teams: ["Alpha", "Beta"],
         budget: 10000,
         basePrice: 500,
+        bidIncrement: 100,
+        maxSquadSize: 11,
+        players: [
+          { name: "Virat", role: "BAT", basePrice: 500 },
+          { name: "Bumrah", role: "BOWL", basePrice: 500 },
+        ],
       },
       AUTH
     );
     assert.equal(created.status, 200);
     const auctionId = created.body.auctionId;
-    assert.ok(auctionId);
 
     const start = await request(
       "POST",
@@ -101,49 +100,76 @@ describe("KPL auction API", () => {
       AUTH
     );
     assert.equal(start.status, 200);
+    assert.equal(start.body.status, "LIVE");
+
+    const roster = await request("GET", `/api/auction/${auctionId}/players`);
+    assert.equal(roster.status, 200);
+    assert.equal(roster.body.length, 2);
+    const virat = roster.body.find((p) => p.name === "Virat");
+    assert.ok(virat);
 
     const setPlayer = await request(
       "POST",
       `/api/auction/${auctionId}/set-player`,
-      { playerName: "Virat", basePrice: 500 },
+      { playerId: virat.id },
       AUTH
     );
     assert.equal(setPlayer.status, 200);
+    assert.equal(setPlayer.body.currentPlayer.name, "Virat");
     assert.equal(setPlayer.body.currentPrice, 500);
+
+    const teams = await request("GET", `/api/auction/${auctionId}/teams`);
+    const alpha = teams.body.find((t) => t.name === "Alpha");
 
     const bid = await request(
       "POST",
       `/api/auction/${auctionId}/bid`,
-      { amount: 700 },
+      { teamId: alpha.id, direction: "up" },
       AUTH
     );
     assert.equal(bid.status, 200);
-    assert.equal(bid.body.currentPrice, 700);
-
-    const teams = await request("GET", `/api/auction/${auctionId}/teams`);
-    assert.equal(teams.status, 200);
-    const teamId = teams.body[0].id;
+    assert.equal(bid.body.currentPrice, 600);
+    assert.equal(bid.body.leadingTeam.name, "Alpha");
 
     const sell = await request(
       "POST",
       `/api/auction/${auctionId}/sell`,
-      { teamId, playerName: "Virat", soldPrice: 700 },
+      { teamId: alpha.id },
       AUTH
     );
     assert.equal(sell.status, 200);
-    assert.equal(sell.body.remainingBudget, 9300);
+    assert.equal(sell.body.lastSold.playerName, "Virat");
+    assert.equal(sell.body.lastSold.soldPrice, 600);
 
-    const state = await request("GET", `/api/auction/${auctionId}/state`);
-    assert.equal(state.status, 200);
-    assert.equal(state.body.currentPlayer, null);
-    assert.equal(state.body.currentPrice, 0);
+    const bumrah = roster.body.find((p) => p.name === "Bumrah");
+    await request(
+      "POST",
+      `/api/auction/${auctionId}/set-player`,
+      { playerId: bumrah.id },
+      AUTH
+    );
+    const unsold = await request(
+      "POST",
+      `/api/auction/${auctionId}/unsold`,
+      {},
+      AUTH
+    );
+    assert.equal(unsold.status, 200);
+    assert.equal(unsold.body.lastUnsold.playerName, "Bumrah");
 
     const summary = await request("GET", `/api/auction/${auctionId}/summary`);
     assert.equal(summary.status, 200);
-    const alpha = summary.body.find((t) => t.teamName === "Alpha");
-    assert.ok(alpha);
-    assert.equal(alpha.totalSpent, 700);
-    assert.equal(alpha.players[0].name, "Virat");
+    assert.equal(summary.body.teams[0].totalSpent, 600);
+    assert.equal(summary.body.unsold.length, 1);
+
+    const ended = await request(
+      "POST",
+      `/api/auction/${auctionId}/end`,
+      {},
+      AUTH
+    );
+    assert.equal(ended.status, 200);
+    assert.equal(ended.body.status, "COMPLETED");
 
     const exported = await request("GET", `/api/auction/${auctionId}/export`);
     assert.equal(exported.status, 200);

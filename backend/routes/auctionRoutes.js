@@ -1,10 +1,19 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db");
 const adminAuth = require("../middleware/adminAuth");
+const svc = require("../services/auctionService");
 
 function getIo(req) {
   return req.app.get("io");
+}
+
+function asyncHandler(fn) {
+  return (req, res) => {
+    Promise.resolve(fn(req, res)).catch((err) => {
+      const status = err.status || 500;
+      res.status(status).json({ error: err.message || "Server error" });
+    });
+  };
 }
 
 /* =========================
@@ -27,393 +36,405 @@ router.post("/login", (req, res) => {
 });
 
 /* =========================
-   CREATE AUCTION (ADMIN)
+   CREATE AUCTION
 ========================= */
-router.post("/", adminAuth, (req, res) => {
-  const { name, teams, budget, basePrice } = req.body;
-  const base_price = Number(basePrice) || 500;
-  const budget_per_team = Number(budget);
+router.post(
+  "/",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const { name, teams, budget, basePrice, bidIncrement, maxSquadSize, players } =
+      req.body || {};
+    const base_price = Number(basePrice) || 500;
+    const bid_increment = Number(bidIncrement) || 100;
+    const budget_per_team = Number(budget);
+    const max_squad = Number(maxSquadSize) || 0;
 
-  if (!name || !teams || !Array.isArray(teams) || teams.length === 0 || !budget_per_team) {
-    return res.status(400).json({ error: "Missing required fields: name, teams, budget" });
-  }
-
-  const cleanTeams = teams.map((t) => String(t).trim()).filter(Boolean);
-  if (cleanTeams.length === 0) {
-    return res.status(400).json({ error: "At least one team is required" });
-  }
-
-  db.run(
-    `INSERT INTO auctions (name, base_price, status) VALUES (?, ?, 'CREATED')`,
-    [name.trim(), base_price],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-
-      const auctionId = this.lastID;
-      const teamStmt = db.prepare(
-        `INSERT INTO teams (auction_id, name, total_budget, remaining_budget)
-         VALUES (?, ?, ?, ?)`
-      );
-
-      cleanTeams.forEach((teamName) => {
-        teamStmt.run(auctionId, teamName, budget_per_team, budget_per_team);
-      });
-      teamStmt.finalize();
-
-      db.run(
-        `INSERT INTO auction_state (auction_id, current_player_name, current_price, is_live)
-         VALUES (?, NULL, 0, 0)`,
-        [auctionId]
-      );
-
-      res.json({ auctionId, message: "Auction created successfully" });
+    if (!name || !teams || !Array.isArray(teams) || teams.length === 0 || !budget_per_team) {
+      return res
+        .status(400)
+        .json({ error: "Missing required fields: name, teams, budget" });
     }
-  );
-});
 
-/* =========================
-   LIST AUCTIONS
-========================= */
-router.get("/", (req, res) => {
-  db.all(
-    `SELECT id, name, base_price, status, created_at FROM auctions ORDER BY id DESC`,
-    [],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
+    const cleanTeams = teams.map((t) => String(t).trim()).filter(Boolean);
+    if (!cleanTeams.length) {
+      return res.status(400).json({ error: "At least one team is required" });
     }
-  );
-});
 
-/* =========================
-   START AUCTION (ADMIN)
-========================= */
-router.post("/:auctionId/start", adminAuth, (req, res) => {
-  const auctionId = req.params.auctionId;
-
-  db.run(`UPDATE auctions SET status='LIVE' WHERE id=?`, [auctionId], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
-
-    db.run(
-      `INSERT INTO auction_state (auction_id, current_player_name, current_price, is_live)
-       VALUES (?, NULL, 0, 1)
-       ON CONFLICT(auction_id) DO UPDATE SET is_live=1`,
-      [auctionId],
-      () => {
-        const io = getIo(req);
-        if (io) io.emit("auction:update", { auctionId: Number(auctionId), status: "LIVE" });
-        res.json({ success: true });
-      }
+    const result = await svc.run(
+      `INSERT INTO auctions (name, base_price, bid_increment, max_squad_size, status)
+       VALUES (?, ?, ?, ?, 'CREATED')`,
+      [name.trim(), base_price, bid_increment, max_squad]
     );
-  });
-});
+    const auctionId = result.lastID;
 
-/* =========================
-   SET PLAYER (ADMIN)
-========================= */
-router.post("/:auctionId/set-player", adminAuth, (req, res) => {
-  const auctionId = req.params.auctionId;
-  const { playerName, basePrice } = req.body;
-  const price = Number(basePrice) || 500;
-
-  if (!playerName || !String(playerName).trim()) {
-    return res.status(400).json({ error: "Player name is required" });
-  }
-
-  db.run(
-    `INSERT INTO auction_state (auction_id, current_player_name, current_price, is_live)
-     VALUES (?, ?, ?, 1)
-     ON CONFLICT(auction_id) DO UPDATE SET
-       current_player_name=excluded.current_player_name,
-       current_price=excluded.current_price,
-       is_live=1`,
-    [auctionId, playerName.trim(), price],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-
-      const payload = {
-        auctionId: Number(auctionId),
-        playerName: playerName.trim(),
-        currentPrice: price,
-      };
-      const io = getIo(req);
-      if (io) io.emit("player:update", payload);
-      res.json({ success: true, ...payload });
-    }
-  );
-});
-
-/* =========================
-   PLACE BID (ADMIN)
-========================= */
-router.post("/:auctionId/bid", adminAuth, (req, res) => {
-  const auctionId = req.params.auctionId;
-  const { amount } = req.body;
-  const newAmount = Number(amount);
-
-  if (!Number.isFinite(newAmount) || newAmount < 0) {
-    return res.status(400).json({ error: "Invalid bid amount" });
-  }
-
-  db.get(
-    `SELECT current_player_name, current_price FROM auction_state WHERE auction_id=?`,
-    [auctionId],
-    (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row || !row.current_player_name) {
-        return res.status(400).json({ error: "No player currently up for bid" });
-      }
-
-      db.run(
-        `UPDATE auction_state SET current_price=? WHERE auction_id=?`,
-        [newAmount, auctionId],
-        (updateErr) => {
-          if (updateErr) return res.status(500).json({ error: updateErr.message });
-
-          const payload = {
-            auctionId: Number(auctionId),
-            playerName: row.current_player_name,
-            currentPrice: newAmount,
-          };
-          const io = getIo(req);
-          if (io) io.emit("player:update", payload);
-          res.json({ success: true, ...payload });
-        }
+    for (const teamName of cleanTeams) {
+      await svc.run(
+        `INSERT INTO teams (auction_id, name, total_budget, remaining_budget, player_count)
+         VALUES (?, ?, ?, ?, 0)`,
+        [auctionId, teamName, budget_per_team, budget_per_team]
       );
     }
-  );
-});
 
-/* =========================
-   SELL PLAYER (ADMIN)
-========================= */
-router.post("/:auctionId/sell", adminAuth, (req, res) => {
-  const auctionId = req.params.auctionId;
-  const { teamId, playerName, soldPrice } = req.body;
-  const price = Number(soldPrice);
-  const tid = Number(teamId);
+    await svc.ensureState(auctionId);
 
-  if (!tid || !playerName || !Number.isFinite(price)) {
-    return res.status(400).json({ error: "teamId, playerName, and soldPrice are required" });
-  }
-
-  db.get(`SELECT remaining_budget, name FROM teams WHERE id=? AND auction_id=?`, [tid, auctionId], (err, team) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!team) return res.status(404).json({ error: "Team not found" });
-    if (team.remaining_budget < price) {
-      return res.status(400).json({ error: "Insufficient budget" });
-    }
-
-    const newRemaining = team.remaining_budget - price;
-
-    db.run(
-      `INSERT INTO players (auction_id, name, sold_price, team_id, status)
-       VALUES (?, ?, ?, ?, 'SOLD')`,
-      [auctionId, playerName, price, tid],
-      function (insertErr) {
-        if (insertErr) return res.status(500).json({ error: insertErr.message });
-
-        db.run(`UPDATE teams SET remaining_budget=? WHERE id=?`, [newRemaining, tid]);
-        db.run(
-          `UPDATE auction_state SET current_player_name=NULL, current_price=0 WHERE auction_id=?`,
-          [auctionId]
+    if (Array.isArray(players) && players.length) {
+      let order = 1;
+      for (const p of players) {
+        const pname = String(p.name || p).trim();
+        if (!pname) continue;
+        await svc.run(
+          `INSERT INTO players (auction_id, name, role, base_price, status, sort_order)
+           VALUES (?, ?, ?, ?, 'AVAILABLE', ?)`,
+          [
+            auctionId,
+            pname,
+            svc.normalizeRole(p.role),
+            Number(p.basePrice) || base_price,
+            order++,
+          ]
         );
-
-        const payload = {
-          auctionId: Number(auctionId),
-          playerName,
-          soldPrice: price,
-          teamId: tid,
-          teamName: team.name,
-          remainingBudget: newRemaining,
-        };
-        const io = getIo(req);
-        if (io) io.emit("player:sold", payload);
-        res.json({ success: true, ...payload });
       }
+    }
+
+    res.json({ auctionId, message: "Auction created successfully" });
+  })
+);
+
+/* =========================
+   LIST / DELETE AUCTIONS
+========================= */
+router.get(
+  "/",
+  asyncHandler(async (_req, res) => {
+    const rows = await svc.all(
+      `SELECT id, name, base_price, bid_increment, max_squad_size, status, created_at
+       FROM auctions ORDER BY id DESC`
     );
-  });
-});
+    res.json(rows);
+  })
+);
+
+router.delete(
+  "/:auctionId",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const id = req.params.auctionId;
+    await svc.run(`DELETE FROM players WHERE auction_id=?`, [id]);
+    await svc.run(`DELETE FROM teams WHERE auction_id=?`, [id]);
+    await svc.run(`DELETE FROM auction_state WHERE auction_id=?`, [id]);
+    await svc.run(`DELETE FROM auctions WHERE id=?`, [id]);
+    res.json({ success: true });
+  })
+);
 
 /* =========================
-   MARK UNSOLD (ADMIN)
+   START / END
 ========================= */
-router.post("/:auctionId/unsold", adminAuth, (req, res) => {
-  const auctionId = req.params.auctionId;
-  const { playerName } = req.body;
+router.post(
+  "/:auctionId/start",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const auction = await svc.getAuction(auctionId);
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
 
-  db.get(
-    `SELECT current_player_name, current_price FROM auction_state WHERE auction_id=?`,
-    [auctionId],
-    (err, state) => {
-      if (err) return res.status(500).json({ error: err.message });
+    await svc.run(`UPDATE auctions SET status='LIVE' WHERE id=?`, [auctionId]);
+    await svc.ensureState(auctionId);
+    await svc.run(`UPDATE auction_state SET is_live=1 WHERE auction_id=?`, [auctionId]);
 
-      const name = (playerName || state?.current_player_name || "").trim();
-      if (!name) return res.status(400).json({ error: "No player to mark unsold" });
+    const live = await svc.buildLivePayload(auctionId);
+    const io = getIo(req);
+    if (io) {
+      io.emit("auction:update", { auctionId, status: "LIVE" });
+      io.emit("auction:live", live);
+    }
+    res.json(live);
+  })
+);
 
-      db.run(
-        `INSERT INTO players (auction_id, name, sold_price, team_id, status)
-         VALUES (?, ?, 0, NULL, 'UNSOLD')`,
-        [auctionId, name],
-        () => {
-          db.run(
-            `UPDATE auction_state SET current_player_name=NULL, current_price=0 WHERE auction_id=?`,
-            [auctionId]
-          );
+router.post(
+  "/:auctionId/end",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    await svc.run(`UPDATE auctions SET status='COMPLETED' WHERE id=?`, [auctionId]);
+    await svc.run(`UPDATE auction_state SET is_live=0 WHERE auction_id=?`, [auctionId]);
+    const live = await svc.buildLivePayload(auctionId);
+    const io = getIo(req);
+    if (io) {
+      io.emit("auction:update", { auctionId, status: "COMPLETED" });
+      io.emit("auction:live", live);
+    }
+    res.json(live);
+  })
+);
 
-          const payload = {
-            auctionId: Number(auctionId),
-            playerName: name,
-          };
-          const io = getIo(req);
-          if (io) io.emit("player:unsold", payload);
-          res.json({ success: true, ...payload });
-        }
+/* =========================
+   PLAYERS ROSTER
+========================= */
+router.get(
+  "/:auctionId/players",
+  asyncHandler(async (req, res) => {
+    const players = await svc.listPlayers(req.params.auctionId, req.query.status);
+    res.json(players);
+  })
+);
+
+router.post(
+  "/:auctionId/players",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const auction = await svc.getAuction(auctionId);
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
+
+    const { name, role, basePrice, players } = req.body || {};
+    const created = [];
+
+    const rows = Array.isArray(players)
+      ? players
+      : name
+        ? [{ name, role, basePrice }]
+        : [];
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "Provide a player name or players array" });
+    }
+
+    const maxOrder = await svc.get(
+      `SELECT COALESCE(MAX(sort_order), 0) AS m FROM players WHERE auction_id=?`,
+      [auctionId]
+    );
+    let order = (maxOrder?.m || 0) + 1;
+
+    for (const p of rows) {
+      const pname = String(p.name || "").trim();
+      if (!pname) continue;
+      const result = await svc.run(
+        `INSERT INTO players (auction_id, name, role, base_price, status, sort_order)
+         VALUES (?, ?, ?, ?, 'AVAILABLE', ?)`,
+        [
+          auctionId,
+          pname,
+          svc.normalizeRole(p.role),
+          Number(p.basePrice) || auction.base_price || 500,
+          order++,
+        ]
       );
+      created.push(result.lastID);
     }
-  );
-});
+
+    res.json({ success: true, createdCount: created.length, ids: created });
+  })
+);
+
+router.delete(
+  "/:auctionId/players/:playerId",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const player = await svc.get(
+      `SELECT * FROM players WHERE id=? AND auction_id=?`,
+      [req.params.playerId, req.params.auctionId]
+    );
+    if (!player) return res.status(404).json({ error: "Player not found" });
+    if (player.status === "SOLD") {
+      return res.status(400).json({ error: "Cannot delete a sold player" });
+    }
+    if (player.status === "BIDDING") {
+      return res.status(400).json({ error: "Cannot delete player currently on the block" });
+    }
+    await svc.run(`DELETE FROM players WHERE id=?`, [req.params.playerId]);
+    res.json({ success: true });
+  })
+);
 
 /* =========================
-   PUBLIC: CURRENT STATE
+   SET PLAYER / BID / SELL
 ========================= */
-router.get("/:auctionId/state", (req, res) => {
-  const { auctionId } = req.params;
-
-  db.get(
-    `
-    SELECT
-      a.id,
-      a.name,
-      a.base_price,
-      a.status,
-      s.current_player_name,
-      s.current_price,
-      s.is_live
-    FROM auctions a
-    LEFT JOIN auction_state s ON a.id = s.auction_id
-    WHERE a.id = ?
-    `,
-    [auctionId],
-    (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row) return res.status(404).json({ error: "Auction not found" });
-
-      res.json({
-        id: row.id,
-        name: row.name,
-        basePrice: row.base_price,
-        status: row.status,
-        currentPlayer: row.current_player_name || null,
-        currentPrice: row.current_price || 0,
-        isLive: Boolean(row.is_live),
-      });
+router.post(
+  "/:auctionId/set-player",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const { playerId, playerName, basePrice } = req.body || {};
+    const live = await svc.setPlayerOnBlock(auctionId, playerId, playerName, basePrice);
+    const io = getIo(req);
+    if (io) {
+      io.emit("player:update", live);
+      io.emit("auction:live", live);
     }
-  );
-});
+    res.json(live);
+  })
+);
+
+router.post(
+  "/:auctionId/bid",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const live = await svc.placeBid(auctionId, req.body || {});
+    const io = getIo(req);
+    if (io) {
+      io.emit("player:update", live);
+      io.emit("auction:live", live);
+    }
+    res.json(live);
+  })
+);
+
+router.post(
+  "/:auctionId/sell",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const result = await svc.sellCurrentPlayer(auctionId, req.body?.teamId);
+    const io = getIo(req);
+    if (io) {
+      io.emit("player:sold", result);
+      io.emit("auction:live", result);
+    }
+    res.json(result);
+  })
+);
+
+router.post(
+  "/:auctionId/unsold",
+  adminAuth,
+  asyncHandler(async (req, res) => {
+    const auctionId = Number(req.params.auctionId);
+    const result = await svc.unsoldCurrentPlayer(auctionId);
+    const io = getIo(req);
+    if (io) {
+      io.emit("player:unsold", result);
+      io.emit("auction:live", result);
+    }
+    res.json(result);
+  })
+);
 
 /* =========================
-   PUBLIC: TEAMS
+   PUBLIC READS
 ========================= */
-router.get("/:auctionId/teams", (req, res) => {
-  db.all(
-    `SELECT id, name, total_budget, remaining_budget FROM teams WHERE auction_id=? ORDER BY id`,
-    [req.params.auctionId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows || []);
+router.get(
+  "/:auctionId/state",
+  asyncHandler(async (req, res) => {
+    const live = await svc.buildLivePayload(Number(req.params.auctionId));
+    if (!live) return res.status(404).json({ error: "Auction not found" });
+    res.json(live);
+  })
+);
+
+router.get(
+  "/:auctionId/teams",
+  asyncHandler(async (req, res) => {
+    res.json(await svc.listTeams(req.params.auctionId));
+  })
+);
+
+router.get(
+  "/:auctionId/summary",
+  asyncHandler(async (req, res) => {
+    const auctionId = req.params.auctionId;
+    const auction = await svc.getAuction(auctionId);
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
+
+    const rows = await svc.all(
+      `
+      SELECT
+        t.id AS teamId,
+        t.name AS teamName,
+        t.total_budget,
+        t.remaining_budget,
+        t.player_count,
+        p.id AS playerId,
+        p.name AS playerName,
+        p.role AS playerRole,
+        p.sold_price,
+        p.status AS playerStatus
+      FROM teams t
+      LEFT JOIN players p ON p.team_id = t.id AND p.status = 'SOLD'
+      WHERE t.auction_id = ?
+      ORDER BY t.id, p.id
+      `,
+      [auctionId]
+    );
+
+    const summary = {};
+    for (const row of rows) {
+      if (!summary[row.teamId]) {
+        summary[row.teamId] = {
+          teamId: row.teamId,
+          teamName: row.teamName,
+          totalBudget: row.total_budget,
+          remainingBudget: row.remaining_budget,
+          playerCount: row.player_count,
+          players: [],
+          totalSpent: 0,
+        };
+      }
+      if (row.playerName) {
+        summary[row.teamId].players.push({
+          id: row.playerId,
+          name: row.playerName,
+          role: row.playerRole,
+          price: row.sold_price,
+        });
+        summary[row.teamId].totalSpent += row.sold_price || 0;
+      }
     }
-  );
-});
 
-/* =========================
-   PUBLIC: SUMMARY
-========================= */
-router.get("/:auctionId/summary", (req, res) => {
-  const { auctionId } = req.params;
+    const unsold = await svc.all(
+      `SELECT id, name, role, base_price FROM players
+       WHERE auction_id=? AND status='UNSOLD' ORDER BY id`,
+      [auctionId]
+    );
 
-  db.all(
-    `
-    SELECT
-      t.id AS teamId,
-      t.name AS teamName,
-      t.total_budget,
-      t.remaining_budget,
-      p.name AS playerName,
-      p.sold_price,
-      p.status AS playerStatus
-    FROM teams t
-    LEFT JOIN players p ON p.team_id = t.id AND p.status = 'SOLD'
-    WHERE t.auction_id = ?
-    ORDER BY t.id
-    `,
-    [auctionId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+    res.json({
+      auction: {
+        id: auction.id,
+        name: auction.name,
+        status: auction.status,
+      },
+      teams: Object.values(summary),
+      unsold,
+    });
+  })
+);
 
-      const summary = {};
-      (rows || []).forEach((row) => {
-        if (!summary[row.teamId]) {
-          summary[row.teamId] = {
-            teamId: row.teamId,
-            teamName: row.teamName,
-            totalBudget: row.total_budget,
-            remainingBudget: row.remaining_budget,
-            players: [],
-            totalSpent: 0,
-          };
-        }
+router.get(
+  "/:auctionId/export",
+  asyncHandler(async (req, res) => {
+    const auctionId = req.params.auctionId;
+    const rows = await svc.all(
+      `
+      SELECT
+        t.name AS teamName,
+        p.name AS playerName,
+        p.role,
+        p.base_price AS basePrice,
+        p.sold_price AS soldPrice,
+        p.status
+      FROM players p
+      LEFT JOIN teams t ON p.team_id = t.id
+      WHERE p.auction_id = ?
+      ORDER BY p.status DESC, t.name, p.name
+      `,
+      [auctionId]
+    );
 
-        if (row.playerName) {
-          summary[row.teamId].players.push({
-            name: row.playerName,
-            price: row.sold_price,
-          });
-          summary[row.teamId].totalSpent += row.sold_price || 0;
-        }
-      });
-
-      res.json(Object.values(summary));
+    let csv = "Team,Player,Role,Base Price,Sold Price,Status\n";
+    for (const row of rows) {
+      const team = row.teamName || "";
+      csv += `"${team}","${row.playerName}","${row.role || ""}",${row.basePrice || 0},${row.soldPrice || 0},${row.status}\n`;
     }
-  );
-});
 
-/* =========================
-   PUBLIC: EXPORT CSV
-========================= */
-router.get("/:auctionId/export", (req, res) => {
-  const { auctionId } = req.params;
-
-  db.all(
-    `
-    SELECT
-      t.name AS teamName,
-      p.name AS playerName,
-      p.sold_price AS soldPrice,
-      p.status
-    FROM players p
-    LEFT JOIN teams t ON p.team_id = t.id
-    WHERE p.auction_id = ?
-    ORDER BY p.status DESC, t.name, p.name
-    `,
-    [auctionId],
-    (err, rows) => {
-      if (err) return res.status(500).send("Failed to export");
-
-      let csv = "Team,Player,Sold Price,Status\n";
-      (rows || []).forEach((row) => {
-        const team = row.teamName || "UNSOLD";
-        csv += `"${team}","${row.playerName}",${row.soldPrice || 0},${row.status}\n`;
-      });
-
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=auction_${auctionId}_players.csv`
-      );
-      res.send(csv);
-    }
-  );
-});
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=auction_${auctionId}_players.csv`
+    );
+    res.send(csv);
+  })
+);
 
 module.exports = router;

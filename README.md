@@ -1,19 +1,26 @@
 # KPL Auction Platform
 
-Realtime cricket-style player auction for KPL tournaments.
+Full live player auction app for KPL-style cricket tournaments.
+
+## What it does
+
+1. Admin creates a tournament with teams, purse budget, bid increment, and optional player roster
+2. Admin runs the auction night: put players on the block, raise bids for a team, sell or mark unsold
+3. Audience display shows current player, price, leading team, and remaining purses in realtime
+4. Summary page shows each squad + unsold list, with CSV export
 
 ## Stack
 
-- **Frontend:** React + Vite (admin console, public live screen, team summary)
+- **Frontend:** React + Vite
 - **Backend:** Express + Socket.IO + SQLite
 
-## Features
+## Screens
 
-- Admin login (default `admin` / `admin123`)
-- Create tournaments with teams and purse budgets
-- Live bidding with socket updates to a public display
-- Sell / unsold player flow with remaining budget tracking
-- Team summary + CSV export
+| Path | Purpose |
+|------|---------|
+| `/` | Admin console (login required) |
+| `/public?auctionId=1` | Live audience / projector screen |
+| `/summary?auctionId=1` | Final squads + CSV |
 
 ## Quick start
 
@@ -21,12 +28,13 @@ Realtime cricket-style player auction for KPL tournaments.
 
 ```bash
 cd backend
-cp .env.example .env   # optional; defaults work locally
+cp .env.example .env
 npm install
 npm start
 ```
 
-API runs at `http://localhost:4000`.
+API: `http://localhost:4000`  
+Default admin: `admin` / `admin123`
 
 ### Frontend
 
@@ -37,25 +45,35 @@ npm install
 npm run dev
 ```
 
-App runs at `http://localhost:5173`.
+App: `http://localhost:5173`
 
-### Screens
+## Auction night flow
 
-| Path | Purpose |
-|------|---------|
-| `/` | Admin panel |
-| `/public?auctionId=1` | Live audience display |
-| `/summary?auctionId=1` | Team results + CSV |
+1. Login as admin
+2. Create tournament (teams + budget; paste roster as `Name | Role | Base`)
+3. Click **Start LIVE** and open **Live screen** on the projector
+4. Click a roster player (**On block**) or use **Set now**
+5. Click a team button to raise that team’s bid
+6. **Sold** or **Unsold**, repeat until the roster is done
+7. **End auction** → open **Summary** / download CSV
+
+Roles: `BAT`, `BOWL`, `AR`, `WK`
 
 ## Environment
 
 **Backend**
 
 - `PORT` (default `4000`)
-- `ADMIN_USERNAME` (default `admin`)
-- `ADMIN_PASSWORD` (default `admin123`)
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+- `DB_PATH` (optional SQLite file path)
 
 **Frontend**
 
-- `VITE_API_BASE_URL` – REST API base URL
-- `VITE_SOCKET_URL` – Socket.IO server URL (falls back to API base)
+- `VITE_API_BASE_URL`
+- `VITE_SOCKET_URL`
+
+## Deploy notes
+
+- Host the backend on a persistent service (Railway / Render / Fly) because Socket.IO + SQLite need a long-lived Node process
+- Point Vercel frontend env vars at that API URL
+- Change admin credentials before a real event
