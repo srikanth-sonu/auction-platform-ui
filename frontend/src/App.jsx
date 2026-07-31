@@ -1,9 +1,46 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "./services/api";
 import { getSocket } from "./services/socket";
 
+const ROLE_LABELS = {
+  BAT: "Batsman",
+  BOWL: "Bowler",
+  AR: "All-rounder",
+  WK: "Wicket-keeper",
+};
+
 function formatMoney(n) {
   return `₹${Number(n || 0).toLocaleString("en-IN")}`;
+}
+
+function parsePlayerLines(text, defaultBase) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      // name | role | basePrice   OR   name, role, basePrice
+      const parts = line.split(/[|,]/).map((p) => p.trim()).filter(Boolean);
+      const name = parts[0];
+      const roleRaw = (parts[1] || "BAT").toUpperCase();
+      const roleMap = {
+        BAT: "BAT",
+        BATSMAN: "BAT",
+        BOWL: "BOWL",
+        BOWLER: "BOWL",
+        AR: "AR",
+        "ALL-ROUNDER": "AR",
+        ALLROUNDER: "AR",
+        WK: "WK",
+        "WICKET-KEEPER": "WK",
+        KEEPER: "WK",
+      };
+      return {
+        name,
+        role: roleMap[roleRaw] || "BAT",
+        basePrice: Number(parts[2]) || defaultBase,
+      };
+    });
 }
 
 function LoginScreen({ onLogin }) {
@@ -18,7 +55,6 @@ function LoginScreen({ onLogin }) {
       setLoginError("Username and password are required");
       return;
     }
-
     setLoading(true);
     setLoginError("");
     try {
@@ -39,40 +75,36 @@ function LoginScreen({ onLogin }) {
       <div className="brand-bar">
         <div className="brand">
           <div className="brand-mark">KPL Auction</div>
-          <div className="brand-sub">Admin console</div>
+          <div className="brand-sub">Tournament player auction console</div>
         </div>
       </div>
-
-      <div className="panel" style={{ maxWidth: 420 }}>
-        <h2>Sign in</h2>
-        <p className="hint">Control live player bidding for your tournament.</p>
-
+      <div className="panel" style={{ maxWidth: 440 }}>
+        <h2>Admin sign in</h2>
+        <p className="hint">
+          Run the live auction: roster → bid → sell → squad summary.
+        </p>
         <form onSubmit={handleLogin}>
           <div className="field">
             <label htmlFor="username">Username</label>
             <input
               id="username"
-              autoComplete="username"
-              placeholder="admin"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              placeholder="admin"
             />
           </div>
-
           <div className="field">
             <label htmlFor="password">Password</label>
             <input
               id="password"
               type="password"
-              autoComplete="current-password"
-              placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
             />
           </div>
-
           {loginError && <p className="error-text">{loginError}</p>}
-
           <button className="btn" type="submit" disabled={loading}>
             {loading ? "Signing in…" : "Login"}
           </button>
@@ -87,32 +119,59 @@ function App() {
     () => localStorage.getItem("admin_logged") === "true"
   );
 
-  const [newAuctionName, setNewAuctionName] = useState("");
-  const [newTeams, setNewTeams] = useState("");
-  const [newBudget, setNewBudget] = useState("35000");
-  const [newBasePrice, setNewBasePrice] = useState("500");
-  const [createMessage, setCreateMessage] = useState("");
-  const [createError, setCreateError] = useState("");
-
   const [auctions, setAuctions] = useState([]);
   const [auctionId, setAuctionId] = useState("");
-  const [auctionStatus, setAuctionStatus] = useState("");
-
-  const [playerName, setPlayerName] = useState("");
-  const [basePrice, setBasePrice] = useState(500);
-  const [currentPlayer, setCurrentPlayer] = useState("");
-  const [currentPrice, setCurrentPrice] = useState(0);
-
-  const [teams, setTeams] = useState([]);
-  const [selectedTeam, setSelectedTeam] = useState("");
+  const [live, setLive] = useState(null);
+  const [players, setPlayers] = useState([]);
   const [actionError, setActionError] = useState("");
+  const [actionOk, setActionOk] = useState("");
+
+  // create form
+  const [newName, setNewName] = useState("");
+  const [newTeams, setNewTeams] = useState("");
+  const [newBudget, setNewBudget] = useState("35000");
+  const [newBase, setNewBase] = useState("500");
+  const [newIncrement, setNewIncrement] = useState("100");
+  const [newMaxSquad, setNewMaxSquad] = useState("11");
+  const [newPlayersText, setNewPlayersText] = useState("");
+
+  // roster add
+  const [rosterText, setRosterText] = useState("");
+  const [quickName, setQuickName] = useState("");
+  const [quickRole, setQuickRole] = useState("BAT");
+  const [quickBase, setQuickBase] = useState(500);
+  const [selectedBidder, setSelectedBidder] = useState("");
+
+  const availablePlayers = useMemo(
+    () => players.filter((p) => p.status === "AVAILABLE"),
+    [players]
+  );
+
+  async function refreshAuctions() {
+    const res = await api.get("/api/auction");
+    setAuctions(res.data || []);
+  }
+
+  async function refreshPlayers(id = auctionId) {
+    if (!id) return;
+    const res = await api.get(`/api/auction/${id}/players`);
+    setPlayers(res.data || []);
+  }
 
   useEffect(() => {
     if (!loggedIn) return;
+    let active = true;
     api
       .get("/api/auction")
-      .then((res) => setAuctions(res.data || []))
-      .catch(() => setAuctions([]));
+      .then((res) => {
+        if (active) setAuctions(res.data || []);
+      })
+      .catch(() => {
+        if (active) setAuctions([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [loggedIn]);
 
   useEffect(() => {
@@ -122,74 +181,48 @@ function App() {
     const socket = getSocket();
     socket.emit("auction:join", { auctionId: Number(auctionId) });
 
-    api.get(`/api/auction/${auctionId}/state`).then((res) => {
+    Promise.all([
+      api.get(`/api/auction/${auctionId}/state`),
+      api.get(`/api/auction/${auctionId}/players`),
+    ]).then(([stateRes, playersRes]) => {
       if (!active) return;
-      setAuctionStatus(res.data.status || "");
-      setCurrentPlayer(res.data.currentPlayer || "");
-      setCurrentPrice(res.data.currentPrice || 0);
-      if (res.data.basePrice) setBasePrice(res.data.basePrice);
-      if (res.data.currentPlayer) setPlayerName(res.data.currentPlayer);
-    });
-
-    api.get(`/api/auction/${auctionId}/teams`).then((res) => {
-      if (active) setTeams(res.data || []);
-    });
-
-    const onPlayerUpdate = (data) => {
-      if (data.auctionId && Number(data.auctionId) !== Number(auctionId)) return;
-      if (data.playerName) {
-        setCurrentPlayer(data.playerName);
-        setPlayerName(data.playerName);
+      setLive(stateRes.data);
+      setPlayers(playersRes.data || []);
+      if (stateRes.data?.leadingTeam?.id) {
+        setSelectedBidder(String(stateRes.data.leadingTeam.id));
       }
-      if (data.currentPrice !== undefined) setCurrentPrice(data.currentPrice);
+      if (stateRes.data?.basePrice) setQuickBase(stateRes.data.basePrice);
+    });
+
+    const refreshRoster = () => {
+      api.get(`/api/auction/${auctionId}/players`).then((res) => {
+        if (active) setPlayers(res.data || []);
+      });
+    };
+
+    const onLive = (data) => {
+      if (data?.id && Number(data.id) !== Number(auctionId)) return;
+      setLive(data);
+      if (data?.leadingTeam?.id) setSelectedBidder(String(data.leadingTeam.id));
       setActionError("");
+      refreshRoster();
     };
 
-    const onPlayerSold = (data) => {
-      if (data.auctionId && Number(data.auctionId) !== Number(auctionId)) return;
-      setCurrentPlayer("");
-      setCurrentPrice(0);
-      setPlayerName("");
-      setSelectedTeam("");
-      setTeams((prev) =>
-        prev.map((t) =>
-          t.id === data.teamId
-            ? { ...t, remaining_budget: data.remainingBudget }
-            : t
-        )
-      );
-    };
+    const onError = (data) => setActionError(data?.message || "Action failed");
 
-    const onPlayerUnsold = (data) => {
-      if (data.auctionId && Number(data.auctionId) !== Number(auctionId)) return;
-      setCurrentPlayer("");
-      setCurrentPrice(0);
-      setPlayerName("");
-      setSelectedTeam("");
-    };
-
-    const onAuctionUpdate = (data) => {
-      if (data.auctionId && Number(data.auctionId) !== Number(auctionId)) return;
-      if (data.status) setAuctionStatus(data.status);
-    };
-
-    const onSocketError = (data) => {
-      setActionError(data?.message || "Action failed");
-    };
-
-    socket.on("player:update", onPlayerUpdate);
-    socket.on("player:sold", onPlayerSold);
-    socket.on("player:unsold", onPlayerUnsold);
-    socket.on("auction:update", onAuctionUpdate);
-    socket.on("error", onSocketError);
+    socket.on("auction:live", onLive);
+    socket.on("player:update", onLive);
+    socket.on("player:sold", onLive);
+    socket.on("player:unsold", onLive);
+    socket.on("error", onError);
 
     return () => {
       active = false;
-      socket.off("player:update", onPlayerUpdate);
-      socket.off("player:sold", onPlayerSold);
-      socket.off("player:unsold", onPlayerUnsold);
-      socket.off("auction:update", onAuctionUpdate);
-      socket.off("error", onSocketError);
+      socket.off("auction:live", onLive);
+      socket.off("player:update", onLive);
+      socket.off("player:sold", onLive);
+      socket.off("player:unsold", onLive);
+      socket.off("error", onError);
     };
   }, [loggedIn, auctionId]);
 
@@ -197,98 +230,195 @@ function App() {
     return <LoginScreen onLogin={() => setLoggedIn(true)} />;
   }
 
-  async function refreshAuctions() {
-    const res = await api.get("/api/auction");
-    setAuctions(res.data || []);
+  function logout() {
+    localStorage.clear();
+    setLoggedIn(false);
   }
 
   async function createAuction() {
-    setCreateError("");
-    setCreateMessage("");
-
+    setActionError("");
+    setActionOk("");
     const teams = newTeams
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
+    const playersList = parsePlayerLines(newPlayersText, Number(newBase) || 500);
 
-    if (!newAuctionName.trim() || teams.length === 0 || !newBudget) {
-      setCreateError("Name, teams, and budget are required");
+    if (!newName.trim() || !teams.length || !newBudget) {
+      setActionError("Name, teams, and budget are required");
       return;
     }
 
     try {
       const res = await api.post("/api/auction", {
-        name: newAuctionName.trim(),
+        name: newName.trim(),
         teams,
         budget: Number(newBudget),
-        basePrice: Number(newBasePrice) || 500,
+        basePrice: Number(newBase) || 500,
+        bidIncrement: Number(newIncrement) || 100,
+        maxSquadSize: Number(newMaxSquad) || 0,
+        players: playersList,
       });
-      setCreateMessage(`Tournament created (ID ${res.data.auctionId})`);
-      setNewAuctionName("");
+      setActionOk(`Created auction #${res.data.auctionId}`);
+      setNewName("");
       setNewTeams("");
+      setNewPlayersText("");
       await refreshAuctions();
       setAuctionId(String(res.data.auctionId));
     } catch (err) {
-      setCreateError(err.response?.data?.error || "Failed to create auction");
+      setActionError(err.response?.data?.error || "Create failed");
     }
   }
 
-  function startAuction() {
-    if (!auctionId) return;
-    getSocket().emit("auction:start", { auctionId: Number(auctionId) });
-    setAuctionStatus("LIVE");
+  async function startAuction() {
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/start`);
+      setLive(res.data);
+      setActionOk("Auction is LIVE");
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Could not start");
+    }
   }
 
-  function setPlayer() {
-    if (!auctionId || !playerName.trim()) {
-      setActionError("Select an auction and enter a player name");
+  async function endAuction() {
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/end`);
+      setLive(res.data);
+      setActionOk("Auction completed");
+      await refreshAuctions();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Could not end");
+    }
+  }
+
+  async function deleteAuction() {
+    if (!auctionId) return;
+    if (!window.confirm("Delete this auction and all its data?")) return;
+    try {
+      await api.delete(`/api/auction/${auctionId}`);
+      setAuctionId("");
+      setLive(null);
+      setPlayers([]);
+      setActionOk("Auction deleted");
+      await refreshAuctions();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Delete failed");
+    }
+  }
+
+  async function addRosterPlayers() {
+    const list = parsePlayerLines(
+      rosterText,
+      Number(live?.basePrice || quickBase || 500)
+    );
+    if (!list.length) {
+      setActionError("Add at least one player line");
       return;
     }
-    getSocket().emit("player:set", {
-      auctionId: Number(auctionId),
-      playerName: playerName.trim(),
-      basePrice: Number(basePrice) || 500,
-    });
-  }
-
-  function bumpBid(delta) {
-    if (!auctionId || !currentPlayer) return;
-    const next = Math.max(Number(basePrice) || 500, currentPrice + delta);
-    if (delta > 0) {
-      getSocket().emit("bid:increase", {
-        auctionId: Number(auctionId),
-        amount: next,
-      });
-    } else {
-      getSocket().emit("bid:decrease", {
-        auctionId: Number(auctionId),
-        amount: next,
-      });
+    try {
+      await api.post(`/api/auction/${auctionId}/players`, { players: list });
+      setRosterText("");
+      setActionOk(`Added ${list.length} player(s)`);
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Could not add players");
     }
   }
 
-  function sellPlayer() {
-    if (!auctionId || !selectedTeam) {
+  async function addQuickPlayerAndSet() {
+    if (!quickName.trim()) {
+      setActionError("Enter a player name");
+      return;
+    }
+    try {
+      const created = await api.post(`/api/auction/${auctionId}/players`, {
+        name: quickName.trim(),
+        role: quickRole,
+        basePrice: Number(quickBase) || 500,
+      });
+      const playerId = created.data.ids?.[0];
+      const res = await api.post(`/api/auction/${auctionId}/set-player`, {
+        playerId,
+      });
+      setLive(res.data);
+      setQuickName("");
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Failed to set player");
+    }
+  }
+
+  async function setPlayerFromRoster(playerId) {
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/set-player`, {
+        playerId,
+      });
+      setLive(res.data);
+      setSelectedBidder("");
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Failed to set player");
+    }
+  }
+
+  async function placeBid(direction, teamId) {
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/bid`, {
+        direction,
+        teamId: teamId || selectedBidder || undefined,
+      });
+      setLive(res.data);
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Bid failed");
+    }
+  }
+
+  async function bidForTeam(teamId) {
+    setSelectedBidder(String(teamId));
+    await placeBid("up", teamId);
+  }
+
+  async function sellPlayer() {
+    const teamId = selectedBidder || live?.leadingTeam?.id;
+    if (!teamId) {
       setActionError("Select the winning team");
       return;
     }
-    getSocket().emit("player:sell", {
-      auctionId: Number(auctionId),
-      teamId: Number(selectedTeam),
-    });
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/sell`, { teamId });
+      setLive(res.data);
+      setSelectedBidder("");
+      setActionOk(
+        `Sold ${res.data.lastSold?.playerName} to ${res.data.lastSold?.teamName}`
+      );
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Sell failed");
+    }
   }
 
-  function markUnsold() {
-    if (!auctionId) return;
-    getSocket().emit("player:unsold", { auctionId: Number(auctionId) });
+  async function markUnsold() {
+    try {
+      const res = await api.post(`/api/auction/${auctionId}/unsold`);
+      setLive(res.data);
+      setSelectedBidder("");
+      setActionOk(`Unsold: ${res.data.lastUnsold?.playerName || "player"}`);
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Unsold failed");
+    }
   }
 
-  function logout() {
-    localStorage.removeItem("admin_logged");
-    localStorage.removeItem("admin_user");
-    localStorage.removeItem("admin_pass");
-    setLoggedIn(false);
+  async function removePlayer(playerId) {
+    try {
+      await api.delete(`/api/auction/${auctionId}/players/${playerId}`);
+      await refreshPlayers();
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Delete failed");
+    }
   }
+
+  const increment = live?.bidIncrement || Number(newIncrement) || 100;
 
   return (
     <div className="app-shell">
@@ -296,8 +426,11 @@ function App() {
         <div className="brand">
           <div className="brand-mark">KPL Auction</div>
           <div className="brand-sub">
-            Admin panel
-            {auctionStatus ? ` · ${auctionStatus}` : ""}
+            Admin console
+            {live?.status ? ` · ${live.status}` : ""}
+            {live?.counts
+              ? ` · ${live.counts.sold}/${live.counts.total} sold`
+              : ""}
           </div>
         </div>
         <div className="nav-links">
@@ -309,7 +442,7 @@ function App() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Open live screen
+                Live screen
               </a>
               <a
                 className="btn btn-ghost"
@@ -327,70 +460,103 @@ function App() {
         </div>
       </div>
 
+      {(actionError || actionOk) && (
+        <div className="panel" style={{ marginBottom: 18, padding: 14 }}>
+          {actionError && <p className="error-text" style={{ margin: 0 }}>{actionError}</p>}
+          {actionOk && !actionError && (
+            <p className="success-text" style={{ margin: 0 }}>{actionOk}</p>
+          )}
+        </div>
+      )}
+
       <div className="grid-2">
         <section className="panel">
-          <h2>Create tournament</h2>
-          <p className="hint">Spin up a fresh auction with team purses.</p>
+          <h2>1. Create tournament</h2>
+          <p className="hint">
+            Teams, purse, optional player roster. One line per player:
+            <code> Name | Role | Base </code>
+          </p>
 
           <div className="field">
             <label>Auction name</label>
             <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
               placeholder="KPL 2026"
-              value={newAuctionName}
-              onChange={(e) => setNewAuctionName(e.target.value)}
             />
           </div>
-
           <div className="field">
             <label>Teams (comma separated)</label>
             <input
-              placeholder="Warriors, Titans, Strikers"
               value={newTeams}
               onChange={(e) => setNewTeams(e.target.value)}
+              placeholder="Warriors, Titans, Strikers, Knights"
             />
           </div>
-
+          <div className="grid-2" style={{ gap: 12 }}>
+            <div className="field">
+              <label>Budget / team</label>
+              <input
+                type="number"
+                value={newBudget}
+                onChange={(e) => setNewBudget(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Default base price</label>
+              <input
+                type="number"
+                value={newBase}
+                onChange={(e) => setNewBase(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Bid increment</label>
+              <input
+                type="number"
+                value={newIncrement}
+                onChange={(e) => setNewIncrement(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Max squad size (0 = no limit)</label>
+              <input
+                type="number"
+                value={newMaxSquad}
+                onChange={(e) => setNewMaxSquad(e.target.value)}
+              />
+            </div>
+          </div>
           <div className="field">
-            <label>Budget per team (₹)</label>
-            <input
-              type="number"
-              value={newBudget}
-              onChange={(e) => setNewBudget(e.target.value)}
+            <label>Player roster (optional)</label>
+            <textarea
+              rows={5}
+              value={newPlayersText}
+              onChange={(e) => setNewPlayersText(e.target.value)}
+              placeholder={"Rohit Sharma | BAT | 500\nBumrah | BOWL | 500\nJadeja | AR | 500"}
             />
           </div>
-
-          <div className="field">
-            <label>Base price (₹)</label>
-            <input
-              type="number"
-              value={newBasePrice}
-              onChange={(e) => setNewBasePrice(e.target.value)}
-            />
-          </div>
-
-          {createError && <p className="error-text">{createError}</p>}
-          {createMessage && <p className="success-text">{createMessage}</p>}
-
           <button className="btn" onClick={createAuction}>
             Create auction
           </button>
         </section>
 
         <section className="panel">
-          <h2>Select tournament</h2>
-          <p className="hint">Choose which auction to run live.</p>
+          <h2>2. Select & control</h2>
+          <p className="hint">Pick the tournament, go live, open the audience screen.</p>
 
           <div className="field">
             <label>Auction</label>
             <select
               value={auctionId}
               onChange={(e) => {
-                setAuctionId(e.target.value);
-                setCurrentPlayer("");
-                setCurrentPrice(0);
-                setPlayerName("");
-                setSelectedTeam("");
+                const next = e.target.value;
+                setAuctionId(next);
+                setLive(null);
+                setPlayers([]);
                 setActionError("");
+                setActionOk("");
+                setSelectedBidder("");
               }}
             >
               <option value="">-- Select auction --</option>
@@ -405,10 +571,24 @@ function App() {
           <div className="btn-row">
             <button
               className="btn btn-gold"
-              disabled={!auctionId || auctionStatus === "LIVE"}
+              disabled={!auctionId || live?.status === "LIVE"}
               onClick={startAuction}
             >
-              Start auction
+              Start LIVE
+            </button>
+            <button
+              className="btn btn-ghost"
+              disabled={!auctionId || live?.status === "COMPLETED"}
+              onClick={endAuction}
+            >
+              End auction
+            </button>
+            <button
+              className="btn btn-danger"
+              disabled={!auctionId}
+              onClick={deleteAuction}
+            >
+              Delete
             </button>
           </div>
         </section>
@@ -417,111 +597,172 @@ function App() {
       {auctionId && (
         <>
           <section className="panel">
-            <h2>Current player</h2>
+            <h2>3. Player roster</h2>
             <p className="hint">
-              Set the player on the block, then drive the bid from here.
+              Available queue. Click a player to put them on the block.
             </p>
 
-            <div className="inline-row">
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>Player name</label>
-                <input
-                  placeholder="Player name"
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                />
+            <div className="grid-2">
+              <div>
+                <div className="field">
+                  <label>Bulk add (one per line)</label>
+                  <textarea
+                    rows={4}
+                    value={rosterText}
+                    onChange={(e) => setRosterText(e.target.value)}
+                    placeholder={"Player | Role | Base"}
+                  />
+                </div>
+                <button className="btn" onClick={addRosterPlayers}>
+                  Add to roster
+                </button>
               </div>
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>Base / start (₹)</label>
-                <input
-                  type="number"
-                  value={basePrice}
-                  onChange={(e) => setBasePrice(Number(e.target.value))}
-                />
+
+              <div>
+                <div className="inline-row" style={{ gridTemplateColumns: "1.2fr 0.7fr 0.7fr auto" }}>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Quick player</label>
+                    <input
+                      value={quickName}
+                      onChange={(e) => setQuickName(e.target.value)}
+                      placeholder="Name"
+                    />
+                  </div>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Role</label>
+                    <select
+                      value={quickRole}
+                      onChange={(e) => setQuickRole(e.target.value)}
+                    >
+                      <option value="BAT">BAT</option>
+                      <option value="BOWL">BOWL</option>
+                      <option value="AR">AR</option>
+                      <option value="WK">WK</option>
+                    </select>
+                  </div>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Base</label>
+                    <input
+                      type="number"
+                      value={quickBase}
+                      onChange={(e) => setQuickBase(Number(e.target.value))}
+                    />
+                  </div>
+                  <button className="btn" onClick={addQuickPlayerAndSet}>
+                    Set now
+                  </button>
+                </div>
               </div>
-              <button className="btn" onClick={setPlayer}>
-                Set player
-              </button>
             </div>
 
-            <div style={{ marginTop: 22 }}>
-              <div className="muted">Now bidding</div>
-              <h3 style={{ margin: "4px 0 0", fontSize: "1.8rem" }}>
-                {currentPlayer || "Waiting…"}
-              </h3>
-              <div className="price" key={currentPrice}>
-                {formatMoney(currentPrice)}
-              </div>
-            </div>
-
-            <div className="btn-row">
-              <button
-                className="btn"
-                disabled={!currentPlayer}
-                onClick={() => bumpBid(100)}
-              >
-                +100
-              </button>
-              <button
-                className="btn"
-                disabled={!currentPlayer}
-                onClick={() => bumpBid(200)}
-              >
-                +200
-              </button>
-              <button
-                className="btn btn-ghost"
-                disabled={!currentPlayer}
-                onClick={() => bumpBid(-100)}
-              >
-                −100
-              </button>
-              <button
-                className="btn btn-ghost"
-                disabled={!currentPlayer}
-                onClick={() => bumpBid(-200)}
-              >
-                −200
-              </button>
+            <div className="roster-list">
+              {availablePlayers.length === 0 && (
+                <p className="muted">No available players in the queue.</p>
+              )}
+              {availablePlayers.map((p) => (
+                <div className="roster-item" key={p.id}>
+                  <div>
+                    <strong>{p.name}</strong>
+                    <span className="muted">
+                      {" "}
+                      · {ROLE_LABELS[p.role] || p.role} · {formatMoney(p.base_price)}
+                    </span>
+                  </div>
+                  <div className="btn-row">
+                    <button className="btn" onClick={() => setPlayerFromRoster(p.id)}>
+                      On block
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => removePlayer(p.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
 
           <section className="panel">
-            <h2>Sell / unsold</h2>
-            <p className="hint">Award the player to a team or mark unsold.</p>
+            <h2>4. Live bidding</h2>
+            <p className="hint">
+              Click a team to raise the bid for them, then sell or mark unsold.
+            </p>
 
-            <div className="field">
-              <label>Winning team</label>
-              <select
-                value={selectedTeam}
-                onChange={(e) => setSelectedTeam(e.target.value)}
-              >
-                <option value="">-- Select team --</option>
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({formatMoney(t.remaining_budget)} left)
-                  </option>
-                ))}
-              </select>
-            </div>
+            <div className="bid-board">
+              <div>
+                <div className="muted">On the block</div>
+                <h3 className="block-player">
+                  {live?.currentPlayer?.name || "Waiting…"}
+                </h3>
+                {live?.currentPlayer && (
+                  <div className="muted">
+                    {ROLE_LABELS[live.currentPlayer.role] || live.currentPlayer.role}
+                    {" · base "}
+                    {formatMoney(live.currentPlayer.basePrice)}
+                  </div>
+                )}
+                <div className="price" key={live?.currentPrice}>
+                  {formatMoney(live?.currentPrice || 0)}
+                </div>
+                <div className="muted">
+                  Leading:{" "}
+                  <strong>
+                    {live?.leadingTeam?.name || "No bidder yet"}
+                  </strong>
+                </div>
+              </div>
 
-            {actionError && <p className="error-text">{actionError}</p>}
+              <div>
+                <div className="btn-row" style={{ marginBottom: 14 }}>
+                  <button
+                    className="btn"
+                    disabled={!live?.currentPlayer}
+                    onClick={() => placeBid("up")}
+                  >
+                    +{increment}
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    disabled={!live?.currentPlayer}
+                    onClick={() => placeBid("down")}
+                  >
+                    −{increment}
+                  </button>
+                  <button
+                    className="btn btn-gold"
+                    disabled={!live?.currentPlayer}
+                    onClick={sellPlayer}
+                  >
+                    Sold
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    disabled={!live?.currentPlayer}
+                    onClick={markUnsold}
+                  >
+                    Unsold
+                  </button>
+                </div>
 
-            <div className="btn-row">
-              <button
-                className="btn btn-gold"
-                disabled={!currentPlayer || !selectedTeam}
-                onClick={sellPlayer}
-              >
-                Sell player
-              </button>
-              <button
-                className="btn btn-danger"
-                disabled={!currentPlayer}
-                onClick={markUnsold}
-              >
-                Mark unsold
-              </button>
+                <div className="team-bid-grid">
+                  {(live?.teams || []).map((t) => (
+                    <button
+                      key={t.id}
+                      className={`team-bid-btn ${
+                        String(selectedBidder) === String(t.id) ? "active" : ""
+                      }`}
+                      disabled={!live?.currentPlayer}
+                      onClick={() => bidForTeam(t.id)}
+                    >
+                      <strong>{t.name}</strong>
+                      <span>{formatMoney(t.remaining_budget)} left</span>
+                      <span>{t.player_count || 0} players</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </section>
         </>
